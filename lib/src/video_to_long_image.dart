@@ -1,8 +1,5 @@
-import 'dart:io';
 
 // import 'package:ffmpeg_kit_flutter_full_gpl/ffmpeg_kit.dart';  // 暂时注释
-import 'package:image/image.dart' as img;
-import 'package:path/path.dart' as p;
 
 import 'stitcher.dart';
 
