@@ -36,6 +36,7 @@ class _HomePageState extends State<HomePage> {
   bool _busy = false;
   String? _status;
   final ImagePicker _picker = ImagePicker();
+  bool _removeDuplicateTop = false;
 
   Future<void> _pickImagesFromGallery() async {
     setState(() {
@@ -81,12 +82,13 @@ class _HomePageState extends State<HomePage> {
       
       setState(() => _status = '拼接中…');
       final stitcher = VerticalStitcher(
-        options: const StitchOptions(
+        options: StitchOptions(
           direction: StitchDirection.auto,
           searchWindow: 500,
           minOverlap: 40,
           blendHeight: 24,
           scaleToMaxWidth: true,
+          removeDuplicateTop: _removeDuplicateTop,
         ),
       );
       final result = stitcher.stitch(loadedImages);
@@ -161,12 +163,13 @@ class _HomePageState extends State<HomePage> {
       }
       setState(() => _status = '拼接中…');
       final stitcher = VerticalStitcher(
-        options: const StitchOptions(
+        options: StitchOptions(
           direction: StitchDirection.auto,
           searchWindow: 500,
           minOverlap: 40,
           blendHeight: 24,
           scaleToMaxWidth: true,
+          removeDuplicateTop: _removeDuplicateTop,
         ),
       );
       final result = stitcher.stitch(images);
@@ -227,6 +230,26 @@ class _HomePageState extends State<HomePage> {
                     ),
                     const SizedBox(width: 12),
                     if (_busy) const CircularProgressIndicator(),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Checkbox(
+                      value: _removeDuplicateTop,
+                      onChanged: _busy ? null : (value) {
+                        setState(() {
+                          _removeDuplicateTop = value ?? false;
+                        });
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        '去除重复头部（适用于多张截图拼接，自动去除前尾后头的重复部分）',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),

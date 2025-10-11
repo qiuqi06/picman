@@ -12,6 +12,7 @@ class StitchOptions {
   final StitchDirection direction; // vertical/horizontal/auto
   final bool scaleToMaxWidth; // if true, scale images to max width instead of padding
   final img.Color? backgroundColor; // used when padding or blending onto canvas
+  final bool removeDuplicateTop; // if true, remove duplicate content from top of second image
 
   const StitchOptions({
     this.searchWindow = 400,
@@ -21,6 +22,7 @@ class StitchOptions {
     this.direction = StitchDirection.auto,
     this.scaleToMaxWidth = false,
     this.backgroundColor,
+    this.removeDuplicateTop = false,
   });
 }
 
@@ -70,6 +72,11 @@ class VerticalStitcher {
   }
 
   StitchResult _stitchVertical(List<img.Image> images) {
+    // Special handling for multiple images with removeDuplicateTop option
+    if (options.removeDuplicateTop) {
+      return _stitchMultipleImagesWithDuplicateRemoval(images);
+    }
+
     // Normalize widths by either padding or scaling to the max width
     final int targetWidth = images.map((e) => e.width).reduce(math.max);
     final List<img.Image> normalized = images.map((im) {
@@ -128,6 +135,163 @@ class VerticalStitcher {
     }
 
     return StitchResult(canvas, yOffsets);
+  }
+
+  /// Special method for stitching multiple images with duplicate removal
+  StitchResult _stitchMultipleImagesWithDuplicateRemoval(List<img.Image> images) {
+    if (images.isEmpty) {
+      throw ArgumentError('No images provided');
+    }
+
+    // Normalize widths
+    final int targetWidth = images.map((e) => e.width).reduce(math.max);
+    final List<img.Image> normalized = images.map((im) => _normalizeImageWidth(im, targetWidth)).toList();
+
+    // Calculate offsets and duplicate heights for each image
+    final List<int> yOffsets = [0];
+    final List<int> duplicateHeights = [0]; // First image has no duplicate
+    int currentBottom = normalized.first.height;
+
+    for (int i = 1; i < normalized.length; i++) {
+      final img.Image prev = normalized[i - 1];
+      final img.Image next = normalized[i];
+
+      // Find duplicate height between previous image bottom and current image top
+      final int duplicateHeight = _findDuplicateTopHeight(prev, next);
+      duplicateHeights.add(duplicateHeight);
+
+      // Calculate offset: current bottom minus duplicate height
+      final int offset = math.max(0, currentBottom - duplicateHeight);
+      yOffsets.add(offset);
+      currentBottom = offset + next.height;
+    }
+
+    // Create the result image
+    final int totalHeight = currentBottom;
+    final img.Image result = img.Image(width: targetWidth, height: totalHeight);
+    
+    // Fill background
+    img.fill(result, color: options.backgroundColor ?? img.ColorRgb8(255, 255, 255));
+    
+    // Place first image at the top
+    img.compositeImage(result, normalized.first, dstX: 0, dstY: 0);
+    
+    // Place subsequent images, skipping duplicate parts
+    for (int i = 1; i < normalized.length; i++) {
+      final img.Image current = normalized[i];
+      final int duplicateHeight = duplicateHeights[i];
+      final int dstY = yOffsets[i];
+      
+      // Crop the current image to remove duplicate top part
+      final img.Image cropped = img.copyCrop(
+        current, 
+        x: 0, 
+        y: duplicateHeight, 
+        width: current.width, 
+        height: current.height - duplicateHeight
+      );
+      
+      // Place the cropped image
+      img.compositeImage(result, cropped, dstX: 0, dstY: dstY);
+    }
+
+    return StitchResult(result, yOffsets);
+  }
+
+  /// Special method for stitching exactly two images with duplicate top removal
+  StitchResult _stitchTwoImagesWithDuplicateRemoval(List<img.Image> images) {
+    if (images.length != 2) {
+      throw ArgumentError('This method only handles exactly 2 images');
+    }
+
+    final img.Image first = images[0];
+    final img.Image second = images[1];
+
+    // Normalize widths
+    final int targetWidth = math.max(first.width, second.width);
+    final img.Image normalizedFirst = _normalizeImageWidth(first, targetWidth);
+    final img.Image normalizedSecond = _normalizeImageWidth(second, targetWidth);
+
+    // Find the best overlap between first image bottom and second image top
+    final int duplicateHeight = _findDuplicateTopHeight(normalizedFirst, normalizedSecond);
+    
+    // Create the result image
+    final int resultHeight = normalizedFirst.height + normalizedSecond.height - duplicateHeight;
+    final img.Image result = img.Image(width: targetWidth, height: resultHeight);
+    
+    // Fill background
+    img.fill(result, color: options.backgroundColor ?? img.ColorRgb8(255, 255, 255));
+    
+    // Place first image at the top
+    img.compositeImage(result, normalizedFirst, dstX: 0, dstY: 0);
+    
+    // Place second image below first, skipping the duplicate top part
+    img.compositeImage(result, normalizedSecond, dstX: 0, dstY: normalizedFirst.height - duplicateHeight);
+    
+    return StitchResult(result, [0, normalizedFirst.height - duplicateHeight]);
+  }
+
+  /// Find the height of duplicate content at the top of second image
+  int _findDuplicateTopHeight(img.Image first, img.Image second) {
+    final int maxSearchHeight = math.min(
+      math.min(first.height, second.height),
+      options.searchWindow,
+    );
+    
+    if (maxSearchHeight < options.minOverlap) {
+      return 0;
+    }
+
+    double bestScore = double.negativeInfinity;
+    int bestHeight = 0;
+
+    // Search from minOverlap to maxSearchHeight
+    for (int h = options.minOverlap; h <= maxSearchHeight; h += 2) {
+      // Get bottom part of first image
+      final img.Image firstBottom = img.copyCrop(
+        first, 
+        x: 0, 
+        y: first.height - h, 
+        width: first.width, 
+        height: h
+      );
+      
+      // Get top part of second image
+      final img.Image secondTop = img.copyCrop(
+        second, 
+        x: 0, 
+        y: 0, 
+        width: second.width, 
+        height: h
+      );
+
+      // Calculate similarity score
+      final double score = _ncc(firstBottom, secondTop);
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestHeight = h;
+      }
+    }
+
+    // Only remove duplicate if similarity is high enough
+    if (bestScore > 0.7) { // Threshold for considering content as duplicate
+      return bestHeight;
+    }
+    
+    return 0;
+  }
+
+  /// Normalize image width by padding or scaling
+  img.Image _normalizeImageWidth(img.Image src, int targetWidth) {
+    if (src.width == targetWidth) return src;
+    
+    if (options.scaleToMaxWidth) {
+      final int newH = (src.height * targetWidth / src.width).round();
+      return img.copyResize(src, width: targetWidth, height: newH, interpolation: img.Interpolation.linear);
+    }
+    
+    return _padToWidth(src, targetWidth);
   }
 
   img.Image _padToWidth(img.Image src, int width) {
