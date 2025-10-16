@@ -89,8 +89,9 @@ class VerticalStitcher {
 
     // Detect identical top and bottom bands to deduplicate common status/footer bars.
     // Keep top common band only on the first image; keep bottom common band only on the last image.
-    // We cap the detection window to a reasonable height to avoid heavy comparisons.
-    const int maxCommonBandCheck = 200;
+    // We cap the detection window adaptively to a reasonable height to avoid heavy comparisons.
+    final int minH = normalized.map((e) => e.height).reduce(math.min);
+    final int maxCommonBandCheck = math.min(300, (minH * 0.2).round().clamp(80, 300));
     final int commonTop =
         _commonTopIdenticalHeight(normalized, maxCommonBandCheck);
     final int commonBottom =
@@ -175,20 +176,76 @@ class VerticalStitcher {
     final int w = imgs[0].width;
     int limit = imgs.map((e) => e.height).reduce(math.min);
     limit = math.min(limit, maxCheck);
+    // Tolerance-based, pairwise comparison with side margins ignored
+    const int perPixelTol = 12; // RGB tolerance per channel
+    const double minRowMatchRatio = 0.85; // percentage of pixels that must match
+    final int margin = (w * 0.08).round(); // ignore ~8% left/right edges
     int h = 0;
-    outer:
+    int matchedRows = 0;
+    int failRows = 0;
+    const int maxFailRows = 3; // allow a few noisy rows (icons/indicator)
+    row_loop:
     for (; h < limit; h++) {
-      for (int x = 0; x < w; x++) {
-        final img.Pixel p0 = imgs[0].getPixel(x, h);
-        for (int i = 1; i < imgs.length; i++) {
-          final img.Pixel pi = imgs[i].getPixel(x, h);
-          if (pi.r != p0.r || pi.g != p0.g || pi.b != p0.b || pi.a != p0.a) {
-            break outer;
+      // Compare row h of adjacent pairs: imgs[i-1] vs imgs[i]
+      for (int i = 1; i < imgs.length; i++) {
+        int match = 0;
+        final int xStart = margin;
+        final int xEnd = w - margin;
+        for (int x = xStart; x < xEnd; x++) {
+          final img.Pixel pA = imgs[i - 1].getPixel(x, h);
+          final img.Pixel pB = imgs[i].getPixel(x, h);
+          if ((pA.r - pB.r).abs() <= perPixelTol &&
+              (pA.g - pB.g).abs() <= perPixelTol &&
+              (pA.b - pB.b).abs() <= perPixelTol) {
+            match++;
           }
         }
+        final int span = (xEnd - xStart).clamp(1, w);
+        if (match < (minRowMatchRatio * span).round()) {
+          // this pair does not match enough on this row
+          matchedRows += 0; // no-op to keep context lines balanced
+          // mark as failure for this row
+          // break to handle failRows accounting below
+          // break out of pair loop
+          // and then account fail
+          // (we can't label here, so use a flag)
+          // but we will just break to outer accounting
+          break row_loop;
+        }
+      }
+      // if we reach here, the row matched for all adjacent pairs
+      matchedRows++;
+      continue;
+    }
+    // If we exited early due to a failure row, count fails and continue until maxFailRows
+    // Re-run from the next row until limit or fail budget exceeded
+    for (int y = matchedRows + 1; y < limit && failRows <= maxFailRows; y++) {
+      bool rowOk = true;
+      final int xStart = margin;
+      final int xEnd = w - margin;
+      final int span = (xEnd - xStart).clamp(1, w);
+      for (int i = 1; i < imgs.length && rowOk; i++) {
+        int match = 0;
+        for (int x = xStart; x < xEnd; x++) {
+          final img.Pixel pA = imgs[i - 1].getPixel(x, y);
+          final img.Pixel pB = imgs[i].getPixel(x, y);
+          if ((pA.r - pB.r).abs() <= perPixelTol &&
+              (pA.g - pB.g).abs() <= perPixelTol &&
+              (pA.b - pB.b).abs() <= perPixelTol) {
+            match++;
+          }
+        }
+        if (match < (minRowMatchRatio * span).round()) {
+          rowOk = false;
+        }
+      }
+      if (rowOk) {
+        matchedRows++;
+      } else {
+        failRows++;
       }
     }
-    return h;
+    return matchedRows;
   }
 
   int _commonBottomIdenticalHeight(List<img.Image> imgs, int maxCheck) {
@@ -196,25 +253,67 @@ class VerticalStitcher {
     final int w = imgs[0].width;
     int limit = imgs.map((e) => e.height).reduce(math.min);
     limit = math.min(limit, maxCheck);
+    // Tolerance-based, pairwise comparison with side margins ignored
+    const int perPixelTol = 12;
+    const double minRowMatchRatio = 0.85;
+    final int margin = (w * 0.08).round();
     int h = 0;
-    outer:
+    int matchedRows = 0;
+    int failRows = 0;
+    const int maxFailRows = 3;
+    row_loop:
     for (; h < limit; h++) {
       final int yRef = imgs.last.height - 1 - h;
-      for (int x = 0; x < w; x++) {
-        final img.Pixel pref = imgs.last.getPixel(x, yRef);
-        for (int i = 0; i < imgs.length - 1; i++) {
-          final int yi = imgs[i].height - 1 - h;
-          final img.Pixel pi = imgs[i].getPixel(x, yi);
-          if (pi.r != pref.r ||
-              pi.g != pref.g ||
-              pi.b != pref.b ||
-              pi.a != pref.a) {
-            break outer;
+      for (int i = 0; i < imgs.length - 1; i++) {
+        final int yi = imgs[i].height - 1 - h;
+        int match = 0;
+        final int xStart = margin;
+        final int xEnd = w - margin;
+        for (int x = xStart; x < xEnd; x++) {
+          final img.Pixel pA = imgs[i].getPixel(x, yi);
+          final img.Pixel pB = imgs.last.getPixel(x, yRef);
+          if ((pA.r - pB.r).abs() <= perPixelTol &&
+              (pA.g - pB.g).abs() <= perPixelTol &&
+              (pA.b - pB.b).abs() <= perPixelTol) {
+            match++;
           }
         }
+        final int span = (xEnd - xStart).clamp(1, w);
+        if (match < (minRowMatchRatio * span).round()) {
+          break row_loop;
+        }
+      }
+      matchedRows++;
+    }
+    for (int k = matchedRows + 1; k < limit && failRows <= maxFailRows; k++) {
+      final int yRef = imgs.last.height - 1 - k;
+      bool rowOk = true;
+      final int xStart = margin;
+      final int xEnd = w - margin;
+      final int span = (xEnd - xStart).clamp(1, w);
+      for (int i = 0; i < imgs.length - 1 && rowOk; i++) {
+        final int yi = imgs[i].height - 1 - k;
+        int match = 0;
+        for (int x = xStart; x < xEnd; x++) {
+          final img.Pixel pA = imgs[i].getPixel(x, yi);
+          final img.Pixel pB = imgs.last.getPixel(x, yRef);
+          if ((pA.r - pB.r).abs() <= perPixelTol &&
+              (pA.g - pB.g).abs() <= perPixelTol &&
+              (pA.b - pB.b).abs() <= perPixelTol) {
+            match++;
+          }
+        }
+        if (match < (minRowMatchRatio * span).round()) {
+          rowOk = false;
+        }
+      }
+      if (rowOk) {
+        matchedRows++;
+      } else {
+        failRows++;
       }
     }
-    return h;
+    return matchedRows;
   }
 
   img.Image _padToWidth(img.Image src, int width) {
@@ -264,7 +363,60 @@ class VerticalStitcher {
       }
     }
 
-    return bestOverlap;
+    // Refinement: use tolerance-based row similarity to extend/correct overlap
+    final int refined = _refineOverlapByTolerance(topBand, bottomBand, maxOverlap, seed: bestOverlap);
+    return refined;
+  }
+
+  int _refineOverlapByTolerance(img.Image topBand, img.Image bottomBand, int maxCheck, {required int seed}) {
+    // Rolling multi-row refinement with consecutive failure budget
+    final int w = topBand.width;
+    final int hTop = topBand.height;
+    final int hBottom = bottomBand.height;
+    final int limit = math.min(math.min(hTop, hBottom), maxCheck);
+    final int start = math.max(options.minOverlap, math.max(0, seed - 20));
+    const int perPixelTol = 16; // more tolerant
+    const double minRowMatchRatio = 0.80; // lower threshold
+    final int margin = (w * 0.10).round(); // ignore ~10% sides
+    const int windowRows = 5; // check a small window of rows for robustness
+    const int maxConsecutiveFails = 2;
+
+    int best = seed;
+    int consecutiveFails = 0;
+    for (int oh = start; oh <= limit; oh++) {
+      // Evaluate average match ratio over up to windowRows rows near the junction
+      double sumRatios = 0.0;
+      int rowsChecked = 0;
+      for (int k = 0; k < windowRows; k++) {
+        final int rowTop = (hTop - oh) + k;
+        final int rowBottom = (oh - 1) - k;
+        if (rowTop < 0 || rowBottom < 0 || rowTop >= hTop || rowBottom >= hBottom) break;
+        int match = 0;
+        final int xStart = margin;
+        final int xEnd = w - margin;
+        for (int x = xStart; x < xEnd; x++) {
+          final img.Pixel pA = topBand.getPixel(x, rowTop);
+          final img.Pixel pB = bottomBand.getPixel(x, rowBottom);
+          if ((pA.r - pB.r).abs() <= perPixelTol &&
+              (pA.g - pB.g).abs() <= perPixelTol &&
+              (pA.b - pB.b).abs() <= perPixelTol) {
+            match++;
+          }
+        }
+        final int span = (xEnd - xStart).clamp(1, w);
+        sumRatios += match / span;
+        rowsChecked++;
+      }
+      final double avgRatio = rowsChecked == 0 ? 0.0 : (sumRatios / rowsChecked);
+      if (avgRatio >= minRowMatchRatio) {
+        best = oh;
+        consecutiveFails = 0;
+      } else {
+        consecutiveFails++;
+        if (consecutiveFails > maxConsecutiveFails) break;
+      }
+    }
+    return math.max(options.minOverlap, best);
   }
 
   double _ncc(img.Image a, img.Image b) {
