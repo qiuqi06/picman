@@ -36,7 +36,6 @@ class _HomePageState extends State<HomePage> {
   bool _busy = false;
   String? _status;
   final ImagePicker _picker = ImagePicker();
-  bool _removeDuplicateTop = false;
 
   Future<void> _pickImagesFromGallery() async {
     setState(() {
@@ -47,10 +46,10 @@ class _HomePageState extends State<HomePage> {
       // 使用 image_picker 从照片库选择多张图片
       final List<XFile> images = await _picker.pickMultiImage(
         imageQuality: 90, // 保持较高质量
-        maxWidth: 2048,   // 限制最大宽度
-        maxHeight: 2048,  // 限制最大高度
+        maxWidth: 2048, // 限制最大宽度
+        maxHeight: 2048, // 限制最大高度
       );
-      
+
       if (images.isEmpty) {
         setState(() {
           _busy = false;
@@ -58,9 +57,9 @@ class _HomePageState extends State<HomePage> {
         });
         return;
       }
-      
+
       setState(() => _status = '读取图片…');
-      
+
       // 将 XFile 转换为 File 并加载图片
       final List<img.Image> loadedImages = [];
       for (final xFile in images) {
@@ -71,7 +70,7 @@ class _HomePageState extends State<HomePage> {
           loadedImages.add(decoded);
         }
       }
-      
+
       if (loadedImages.length < 2) {
         setState(() {
           _busy = false;
@@ -79,16 +78,15 @@ class _HomePageState extends State<HomePage> {
         });
         return;
       }
-      
+
       setState(() => _status = '拼接中…');
       final stitcher = VerticalStitcher(
-        options: StitchOptions(
+        options: const StitchOptions(
           direction: StitchDirection.auto,
           searchWindow: 500,
           minOverlap: 40,
           blendHeight: 24,
           scaleToMaxWidth: true,
-          removeDuplicateTop: _removeDuplicateTop,
         ),
       );
       final result = stitcher.stitch(loadedImages);
@@ -119,7 +117,8 @@ class _HomePageState extends State<HomePage> {
     try {
       // 智能选择初始目录：优先选择照片库相关目录
       String? initialDir;
-      final String userHome = Platform.environment['HOME'] ?? '/Users/${Platform.environment['USER']}';
+      final String userHome = Platform.environment['HOME'] ??
+          '/Users/${Platform.environment['USER']}';
       final List<String> photoPaths = [
         '$userHome/Pictures', // 标准图片目录
         '$userHome/Desktop', // 桌面（常用存放位置）
@@ -129,7 +128,7 @@ class _HomePageState extends State<HomePage> {
         '$userHome/Pictures/iPhoto Library.photolibrary', // 旧版 iPhoto 库
         '$userHome/Pictures/Aperture Library.aplibrary', // Aperture 库
       ];
-      
+
       for (final path in photoPaths) {
         if (Directory(path).existsSync()) {
           initialDir = path;
@@ -153,7 +152,8 @@ class _HomePageState extends State<HomePage> {
         return;
       }
       setState(() => _status = '读取图片…');
-      final images = await ImageIO.loadImages(res.files.map((f) => f.path!).toList());
+      final images =
+          await ImageIO.loadImages(res.files.map((f) => f.path!).toList());
       if (images.length < 2) {
         setState(() {
           _busy = false;
@@ -163,13 +163,12 @@ class _HomePageState extends State<HomePage> {
       }
       setState(() => _status = '拼接中…');
       final stitcher = VerticalStitcher(
-        options: StitchOptions(
+        options: const StitchOptions(
           direction: StitchDirection.auto,
           searchWindow: 500,
           minOverlap: 40,
           blendHeight: 24,
           scaleToMaxWidth: true,
-          removeDuplicateTop: _removeDuplicateTop,
         ),
       );
       final result = stitcher.stitch(images);
@@ -232,26 +231,6 @@ class _HomePageState extends State<HomePage> {
                     if (_busy) const CircularProgressIndicator(),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Checkbox(
-                      value: _removeDuplicateTop,
-                      onChanged: _busy ? null : (value) {
-                        setState(() {
-                          _removeDuplicateTop = value ?? false;
-                        });
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        '去除重复头部（适用于多张截图拼接，自动去除前尾后头的重复部分）',
-                        style: TextStyle(fontSize: 14),
-                      ),
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -270,7 +249,8 @@ class _HomePageState extends State<HomePage> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text(_status!, style: const TextStyle(color: Colors.grey)),
+                child:
+                    Text(_status!, style: const TextStyle(color: Colors.grey)),
               ),
             ),
           const Divider(height: 1),
@@ -290,4 +270,3 @@ class _HomePageState extends State<HomePage> {
     );
   }
 }
-

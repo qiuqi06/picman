@@ -1,5 +1,8 @@
+import 'dart:io';
 
 // import 'package:ffmpeg_kit_flutter_full_gpl/ffmpeg_kit.dart';  // 暂时注释
+import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 
 import 'stitcher.dart';
 
@@ -23,7 +26,7 @@ class VideoToLongImage {
   Future<StitchResult> convert(String inputVideoPath) async {
     // 暂时禁用视频功能，避免 FFmpeg 依赖问题
     throw UnsupportedError('视频转长图功能暂时不可用，需要 FFmpeg 支持');
-    
+
     // 原始代码（暂时注释）
     /*
     final Directory tmpDir = await Directory.systemTemp.createTemp('picman_frames_');
