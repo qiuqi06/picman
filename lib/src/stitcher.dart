@@ -15,8 +15,8 @@ class StitchOptions {
   final img.Color? backgroundColor; // used when padding or blending onto canvas
 
   const StitchOptions({
-    this.searchWindow = 400,
-    this.minOverlap = 40,
+    this.searchWindow = 1800,
+    this.minOverlap = 10,
     this.blendHeight = 24,
     this.downscaleForSearch = true,
     this.direction = StitchDirection.auto,
@@ -91,54 +91,85 @@ class VerticalStitcher {
     // Keep top common band only on the first image; keep bottom common band only on the last image.
     // We cap the detection window adaptively to a reasonable height to avoid heavy comparisons.
     final int minH = normalized.map((e) => e.height).reduce(math.min);
-    final int maxCommonBandCheck = math.min(300, (minH * 0.2).round().clamp(80, 300));
+    final int maxCommonBandCheck =
+        math.min(600, (minH * 0.3).round().clamp(80, 600));
+    print('maxCommonBandCheck: $maxCommonBandCheck');
     final int commonTop =
         _commonTopIdenticalHeight(normalized, maxCommonBandCheck);
     final int commonBottom =
         _commonBottomIdenticalHeight(normalized, maxCommonBandCheck);
 
+    print('commonTop: $commonTop, commonBottom: $commonBottom');
+
     // Apply cropping according to the rule:
     // - First image: remove only bottom common band
     // - Last image: remove only top common band
     // - Middle images: remove both top and bottom common bands
-    final List<img.Image> trimmed =
-        List<img.Image>.generate(normalized.length, (i) {
+    List<img.Image> trimmed = List<img.Image>.generate(normalized.length, (i) {
       final bool isFirst = i == 0;
       final bool isLast = i == normalized.length - 1;
-      final int cutTop = isFirst ? 0 : commonTop;
-      final int cutBottom = isLast ? 0 : commonBottom;
+      // final int cutTop = isFirst ? 0 : commonTop;
+      // final int cutBottom = isLast ? 0 : commonBottom;
+      final int cutTop = commonTop;
+      final int cutBottom = commonBottom;
       return _cropWithBounds(normalized[i], cutTop, cutBottom);
-    }, growable: false);
+    }, growable: true);
+    trimmed.insert(
+        0, _cropWithBounds(normalized[0], 0, normalized[0].height - commonTop));
+    trimmed.add(_cropWithBounds(normalized[normalized.length - 1],
+        normalized[normalized.length - 1].height - commonBottom, 0));
+    List<int> yOffsets = [0];
+    yOffsets.insert(1, trimmed.first.height);
 
-    final List<int> yOffsets = [0];
-    int currentBottom = trimmed.first.height;
+    //当前图片底部位置,包含重叠区域
+    int currentBottom = trimmed.first.height + trimmed[1].height;
 
-    for (int i = 1; i < trimmed.length; i++) {
+    print('total trimmed-images: ${trimmed.length}');
+    print('first trimmed height: ${trimmed.first.height}');
+    for (int i = 0; i < trimmed.length; i++) {
+      print('trimmed[$i] height: ${trimmed[i].height}');
+    }
+
+    for (int i = 2; i < trimmed.length - 1; i++) {
+      // for (int i = 1; i < trimmed.length; i++) {
       final img.Image prev = trimmed[i - 1];
       final img.Image next = trimmed[i];
 
       final int overlap = _estimateVerticalOverlap(prev, next);
-      final int offset = math.max(0, currentBottom - overlap);
+      // final int offset = math.max(0, currentBottom - overlap);
+      final int offset = math.max(0, currentBottom);
+
       yOffsets.add(offset);
       currentBottom = offset + next.height;
+      print('offset for image $i: $offset (overlap: $overlap)');
     }
 
-    final int totalHeight = currentBottom;
-    final img.Image canvas = img.Image(width: targetWidth, height: totalHeight);
+    yOffsets.add(yOffsets.last + trimmed[trimmed.length - 2].height);
 
+    print('all yOffsets: $yOffsets');
+
+    final int totalHeight = currentBottom + trimmed.last.height;
+    final img.Image canvas = img.Image(width: targetWidth, height: totalHeight);
+    print('totalHeight: $totalHeight');
     // Draw first image
     img.fill(canvas,
         color: options.backgroundColor ?? img.ColorRgb8(255, 255, 255));
     img.compositeImage(canvas, trimmed.first, dstX: 0, dstY: 0);
+    print('hello2');
+
+    // return StitchResult(canvas, yOffsets);
 
     // Composite subsequent images with optional blending in the overlap region
     for (int i = 1; i < trimmed.length; i++) {
+      print('composite   i: $i');
+
       final img.Image prev = trimmed[i - 1];
       final img.Image next = trimmed[i];
       final int dstY = yOffsets[i];
       final int prevBottom = yOffsets[i - 1] + prev.height;
-      final int overlapHeight = math.max(0, prevBottom - dstY);
-
+      int overlapHeight = math.max(0, prevBottom - dstY);
+      overlapHeight = 0; //todo
+      print('overlapHeight   i: $i     $overlapHeight');
       if (overlapHeight > 0) {
         final int blendH = math.min(options.blendHeight, overlapHeight);
         // Copy non-overlap top part of next
@@ -159,7 +190,9 @@ class VerticalStitcher {
       } else {
         img.compositeImage(canvas, next, dstX: 0, dstY: dstY);
       }
+      print('finish   i: $i    ');
     }
+    print('hello3');
 
     return StitchResult(canvas, yOffsets);
   }
@@ -178,8 +211,10 @@ class VerticalStitcher {
     limit = math.min(limit, maxCheck);
     // Tolerance-based, pairwise comparison with side margins ignored
     const int perPixelTol = 12; // RGB tolerance per channel
-    const double minRowMatchRatio = 0.85; // percentage of pixels that must match
+    const double minRowMatchRatio =
+        0.85; // percentage of pixels that must match
     final int margin = (w * 0.08).round(); // ignore ~8% left/right edges
+    // int h = 0; //qqtodo 80
     int h = 0;
     int matchedRows = 0;
     int failRows = 0;
@@ -364,11 +399,29 @@ class VerticalStitcher {
     }
 
     // Refinement: use tolerance-based row similarity to extend/correct overlap
-    final int refined = _refineOverlapByTolerance(topBand, bottomBand, maxOverlap, seed: bestOverlap);
-    return refined;
+    final int refined = _refineOverlapByTolerance(
+        topBand, bottomBand, maxOverlap,
+        seed: bestOverlap);
+
+    // Growth from a small seed (e.g., 10px) comparing prev tail vs next head
+    final int grown =
+        _growOverlapFromSeed(topBand, bottomBand, maxOverlap, seed: 1);
+
+    // Sampled 20px strip check every ~100px from previous tail vs next head
+    final int sampledSeed = _seedFromSampledStrips(
+        topBand, bottomBand, maxOverlap,
+        stripH: 20, step: 100);
+    final int grownFromSample = sampledSeed > 0
+        ? _growOverlapFromSeed(topBand, bottomBand, maxOverlap,
+            seed: sampledSeed)
+        : 0;
+
+    return math.max(refined, math.max(grown, grownFromSample));
   }
 
-  int _refineOverlapByTolerance(img.Image topBand, img.Image bottomBand, int maxCheck, {required int seed}) {
+  int _refineOverlapByTolerance(
+      img.Image topBand, img.Image bottomBand, int maxCheck,
+      {required int seed}) {
     // Rolling multi-row refinement with consecutive failure budget
     final int w = topBand.width;
     final int hTop = topBand.height;
@@ -376,7 +429,7 @@ class VerticalStitcher {
     final int limit = math.min(math.min(hTop, hBottom), maxCheck);
     final int start = math.max(options.minOverlap, math.max(0, seed - 20));
     const int perPixelTol = 16; // more tolerant
-    const double minRowMatchRatio = 0.80; // lower threshold
+    const double minRowMatchRatio = 0.9; // lower threshold
     final int margin = (w * 0.10).round(); // ignore ~10% sides
     const int windowRows = 5; // check a small window of rows for robustness
     const int maxConsecutiveFails = 2;
@@ -390,7 +443,10 @@ class VerticalStitcher {
       for (int k = 0; k < windowRows; k++) {
         final int rowTop = (hTop - oh) + k;
         final int rowBottom = (oh - 1) - k;
-        if (rowTop < 0 || rowBottom < 0 || rowTop >= hTop || rowBottom >= hBottom) break;
+        if (rowTop < 0 ||
+            rowBottom < 0 ||
+            rowTop >= hTop ||
+            rowBottom >= hBottom) break;
         int match = 0;
         final int xStart = margin;
         final int xEnd = w - margin;
@@ -407,13 +463,117 @@ class VerticalStitcher {
         sumRatios += match / span;
         rowsChecked++;
       }
-      final double avgRatio = rowsChecked == 0 ? 0.0 : (sumRatios / rowsChecked);
+      final double avgRatio =
+          rowsChecked == 0 ? 0.0 : (sumRatios / rowsChecked);
       if (avgRatio >= minRowMatchRatio) {
         best = oh;
         consecutiveFails = 0;
       } else {
         consecutiveFails++;
         if (consecutiveFails > maxConsecutiveFails) break;
+      }
+    }
+    return math.max(options.minOverlap, best);
+  }
+
+  int _seedFromSampledStrips(
+      img.Image topBand, img.Image bottomBand, int maxCheck,
+      {int stripH = 20, int step = 100}) {
+    // Sample 20px strips from the bottom of topBand upward every `step` pixels
+    // and compare with the top strip of bottomBand. If similar under tolerance,
+    // return that height as a seed for growth.
+    final int w = topBand.width;
+    final int hTop = topBand.height;
+    final int hBottom = bottomBand.height;
+    final int limit = math.min(math.min(hTop, hBottom), maxCheck);
+    if (stripH <= 0 || limit < stripH) return 0;
+
+    const int perPixelTol = 18;
+    const double minRowMatchRatio = 0.80;
+    final int margin = (w * 0.12).round();
+
+    int bestSeed = 0;
+    for (int oh = stripH; oh <= limit; oh += step) {
+      // top strip ends at bottom of topBand at height `oh`
+      final int topY = hTop - oh;
+      final int bottomY = 0; // head of bottomBand
+      if (topY < 0 || bottomY + stripH > hBottom) break;
+      final img.Image tStrip =
+          img.copyCrop(topBand, x: 0, y: topY, width: w, height: stripH);
+      final img.Image bStrip =
+          img.copyCrop(bottomBand, x: 0, y: bottomY, width: w, height: stripH);
+
+      // Compute average ratio across strip rows
+      double sumRatios = 0.0;
+      for (int y = 0; y < stripH; y++) {
+        int match = 0;
+        final int xStart = margin;
+        final int xEnd = w - margin;
+        for (int x = xStart; x < xEnd; x++) {
+          final img.Pixel pa = tStrip.getPixel(x, y);
+          final img.Pixel pb = bStrip.getPixel(x, y);
+          if ((pa.r - pb.r).abs() <= perPixelTol &&
+              (pa.g - pb.g).abs() <= perPixelTol &&
+              (pa.b - pb.b).abs() <= perPixelTol) {
+            match++;
+          }
+        }
+        final int span = (xEnd - xStart).clamp(1, w);
+        sumRatios += match / span;
+      }
+      final double avgRatio = sumRatios / stripH;
+      if (avgRatio >= minRowMatchRatio) {
+        bestSeed = oh;
+      }
+    }
+    return bestSeed;
+  }
+
+  int _growOverlapFromSeed(
+      img.Image topBand, img.Image bottomBand, int maxCheck,
+      {int seed = 10}) {
+    // Start with a small overlap seed (rows from the very bottom of topBand and top of bottomBand)
+    // and grow while rows match under tolerance. This directly targets scroll overlaps.
+    final int w = topBand.width;
+    final int hTop = topBand.height;
+    final int hBottom = bottomBand.height;
+    final int limit = math.min(math.min(hTop, hBottom), maxCheck);
+    int oh = seed.clamp(0, limit);
+
+    // Parameters (slightly aggressive)
+    const int perPixelTol = 18;
+    const double minRowMatchRatio = 0.78;
+    final int margin = (w * 0.12).round();
+    const int maxConsecutiveFails = 3;
+
+    int best = oh;
+    int consecutiveFails = 0;
+    while (oh < limit) {
+      final int rowTop =
+          hTop - oh - 1; // next row to test expanding upward in top
+      final int rowBottom = oh; // next row to test expanding downward in bottom
+      if (rowTop < 0 || rowBottom >= hBottom) break;
+      int match = 0;
+      final int xStart = margin;
+      final int xEnd = w - margin;
+      for (int x = xStart; x < xEnd; x++) {
+        final img.Pixel pA = topBand.getPixel(x, rowTop);
+        final img.Pixel pB = bottomBand.getPixel(x, rowBottom);
+        if ((pA.r - pB.r).abs() <= perPixelTol &&
+            (pA.g - pB.g).abs() <= perPixelTol &&
+            (pA.b - pB.b).abs() <= perPixelTol) {
+          match++;
+        }
+      }
+      final int span = (xEnd - xStart).clamp(1, w);
+      if (match >= (minRowMatchRatio * span).round()) {
+        oh++;
+        best = oh;
+        consecutiveFails = 0;
+      } else {
+        consecutiveFails++;
+        if (consecutiveFails > maxConsecutiveFails) break;
+        oh++;
       }
     }
     return math.max(options.minOverlap, best);
