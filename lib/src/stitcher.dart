@@ -378,7 +378,7 @@ class VerticalStitcher {
 
     const int perPixelTol = 12; // tolerance per RGB channel
     const double minRegionMatchRatio = 0.92; // ratio across the whole region
-
+    // todo 算法优化, 可以top从底开始算
     int best = 0;
     // for (int h = options.minOverlap; h <= maxCheck; h++) {
     for (int h = math.min(top.height, bottom.height); h >= 1; h -= 2) {
